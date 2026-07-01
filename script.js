@@ -2,6 +2,13 @@ const DB_NAME = "image-note-table";
 const DB_VERSION = 1;
 const STORE_NAME = "kv";
 const ROWS_KEY = "rows";
+const LOCAL_UPDATED_KEY = `${DB_NAME}:local-updated-at`;
+const CLOUD_TOKEN_KEY = `${DB_NAME}:github-token`;
+const CLOUD_REPO_KEY = `${DB_NAME}:github-repo`;
+const CLOUD_LAST_SYNC_KEY = `${DB_NAME}:cloud-last-sync-at`;
+const CLOUD_DEFAULT_REPO = "trantuan110191/ghi-chu-anh-data";
+const CLOUD_DATA_PATH = "data.json";
+const CLOUD_BRANCH = "main";
 const STATUS_OPTIONS = new Set(["todo", "doing", "done"]);
 const DEFAULT_STATUS = "todo";
 const STATUS_LABELS = {
@@ -18,6 +25,8 @@ const els = {
   exportBtn: document.querySelector("#exportBtn"),
   importBtn: document.querySelector("#importBtn"),
   importFile: document.querySelector("#importFile"),
+  syncBtn: document.querySelector("#syncBtn"),
+  syncButtonText: document.querySelector("#syncButtonText"),
   searchInput: document.querySelector("#searchInput"),
   dialog: document.querySelector("#imageDialog"),
   dialogTitle: document.querySelector("#dialogTitle"),
@@ -26,6 +35,15 @@ const els = {
   closeDialogBtn: document.querySelector("#closeDialogBtn"),
   downloadImageBtn: document.querySelector("#downloadImageBtn"),
   deleteImageBtn: document.querySelector("#deleteImageBtn"),
+  syncDialog: document.querySelector("#syncDialog"),
+  closeSyncDialogBtn: document.querySelector("#closeSyncDialogBtn"),
+  syncTokenInput: document.querySelector("#syncTokenInput"),
+  syncRepoInput: document.querySelector("#syncRepoInput"),
+  connectSyncBtn: document.querySelector("#connectSyncBtn"),
+  pullSyncBtn: document.querySelector("#pullSyncBtn"),
+  pushSyncBtn: document.querySelector("#pushSyncBtn"),
+  disconnectSyncBtn: document.querySelector("#disconnectSyncBtn"),
+  syncMessage: document.querySelector("#syncMessage"),
 };
 
 let rows = [];
@@ -42,6 +60,13 @@ let previewDragStartY = 0;
 let previewDragScrollLeft = 0;
 let previewDragScrollTop = 0;
 let openStatusRowId = null;
+let localUpdatedAt = localStorage.getItem(LOCAL_UPDATED_KEY) || "";
+let cloudToken = localStorage.getItem(CLOUD_TOKEN_KEY) || "";
+let cloudRepo = localStorage.getItem(CLOUD_REPO_KEY) || CLOUD_DEFAULT_REPO;
+let cloudLastSyncAt = localStorage.getItem(CLOUD_LAST_SYNC_KEY) || "";
+let cloudSha = "";
+let cloudSyncTimer = null;
+let cloudSyncing = false;
 let saveTimer = null;
 let dbPromise = null;
 
@@ -53,10 +78,12 @@ async function init() {
     rows = [createRow()];
     await saveRows();
   }
+  ensureLocalUpdatedAt();
 
   renderRows();
   wireEvents();
   updateStatus();
+  initCloudSync();
 }
 
 function wireEvents() {
@@ -72,6 +99,12 @@ function wireEvents() {
   els.exportBtn.addEventListener("click", exportRows);
   els.importBtn.addEventListener("click", () => els.importFile.click());
   els.importFile.addEventListener("change", importRows);
+  els.syncBtn.addEventListener("click", openSyncDialog);
+  els.closeSyncDialogBtn.addEventListener("click", closeSyncDialog);
+  els.connectSyncBtn.addEventListener("click", connectCloudSync);
+  els.pullSyncBtn.addEventListener("click", pullCloudNow);
+  els.pushSyncBtn.addEventListener("click", pushCloudNow);
+  els.disconnectSyncBtn.addEventListener("click", disconnectCloudSync);
 
   els.rows.addEventListener("input", (event) => {
     const textarea = event.target.closest("textarea");
@@ -299,9 +332,10 @@ async function attachImage(rowId, file) {
   const row = findRow(rowId);
   if (!row) return;
 
-  row.image = await readFileAsDataUrl(file);
+  const preparedImage = await prepareImageForStorage(file);
+  row.image = preparedImage.dataUrl;
   row.imageName = file.name || `screenshot-${new Date().toISOString()}.png`;
-  row.imageType = file.type || "image/png";
+  row.imageType = preparedImage.type;
   row.updatedAt = new Date().toISOString();
   activeImageRowId = rowId;
 
@@ -580,8 +614,10 @@ async function importRows(event) {
 
     if (!rows.length) rows = [createRow()];
     activeImageRowId = null;
+    markLocalUpdated();
     await saveRows();
     renderRows();
+    queueCloudSync();
   } catch (error) {
     window.alert("File nhập không hợp lệ.");
   } finally {
@@ -601,6 +637,57 @@ function createRow() {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+async function prepareImageForStorage(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/gif") {
+    return {
+      dataUrl: await readFileAsDataUrl(file),
+      type: file.type || "image/png",
+    };
+  }
+
+  try {
+    const image = await loadImageFile(file);
+    const maxSide = 1600;
+    const scale = Math.min(1, maxSide / Math.max(image.naturalWidth, image.naturalHeight));
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+
+    return {
+      dataUrl: canvas.toDataURL("image/jpeg", 0.84),
+      type: "image/jpeg",
+    };
+  } catch (error) {
+    return {
+      dataUrl: await readFileAsDataUrl(file),
+      type: file.type || "image/png",
+    };
+  }
+}
+
+function loadImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.addEventListener("load", () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    });
+    image.addEventListener("error", () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Cannot load image"));
+    });
+    image.src = url;
+  });
 }
 
 function getImageFromClipboard(clipboardData) {
@@ -657,8 +744,12 @@ function updateStatus(visibleCount = rows.length) {
 }
 
 function queueSave() {
+  markLocalUpdated();
   window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(saveRows, 180);
+  saveTimer = window.setTimeout(async () => {
+    await saveRows();
+    queueCloudSync();
+  }, 180);
 }
 
 async function loadRows() {
@@ -669,6 +760,355 @@ async function loadRows() {
 
 async function saveRows() {
   await storageSet(ROWS_KEY, rows);
+}
+
+function initCloudSync() {
+  els.syncRepoInput.value = cloudRepo;
+  els.syncTokenInput.value = cloudToken;
+  updateCloudStatus(cloudToken ? "Đã kết nối" : "Chưa kết nối");
+
+  if (cloudToken) {
+    syncWithCloud("auto");
+  }
+}
+
+function openSyncDialog() {
+  els.syncTokenInput.value = cloudToken;
+  els.syncRepoInput.value = cloudRepo;
+  updateCloudMessage(cloudToken ? "Đã kết nối" : "Chưa kết nối");
+
+  if (typeof els.syncDialog.showModal === "function") {
+    els.syncDialog.showModal();
+  }
+}
+
+function closeSyncDialog() {
+  els.syncDialog.close();
+}
+
+async function connectCloudSync() {
+  const token = els.syncTokenInput.value.trim();
+  const repo = els.syncRepoInput.value.trim() || CLOUD_DEFAULT_REPO;
+
+  if (!token) {
+    updateCloudMessage("Thiếu token");
+    return;
+  }
+
+  try {
+    parseCloudRepo(repo);
+  } catch (error) {
+    updateCloudMessage("Sai kho dữ liệu");
+    return;
+  }
+
+  cloudToken = token;
+  cloudRepo = repo;
+  localStorage.setItem(CLOUD_TOKEN_KEY, cloudToken);
+  localStorage.setItem(CLOUD_REPO_KEY, cloudRepo);
+  updateCloudStatus("Đang sync...");
+  await syncWithCloud("auto");
+}
+
+function disconnectCloudSync() {
+  cloudToken = "";
+  cloudSha = "";
+  cloudLastSyncAt = "";
+  localStorage.removeItem(CLOUD_TOKEN_KEY);
+  localStorage.removeItem(CLOUD_LAST_SYNC_KEY);
+  updateCloudStatus("Chưa kết nối");
+  updateCloudMessage("Đã ngắt");
+}
+
+async function pullCloudNow() {
+  if (!cloudToken) {
+    updateCloudMessage("Chưa kết nối");
+    return;
+  }
+
+  await syncWithCloud("pull");
+}
+
+async function pushCloudNow() {
+  if (!cloudToken) {
+    updateCloudMessage("Chưa kết nối");
+    return;
+  }
+
+  await syncWithCloud("push");
+}
+
+function queueCloudSync() {
+  if (!cloudToken) return;
+
+  window.clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = window.setTimeout(() => {
+    syncWithCloud("auto");
+  }, 1100);
+}
+
+async function syncWithCloud(mode) {
+  if (!cloudToken || cloudSyncing) return;
+
+  cloudSyncing = true;
+  updateCloudStatus("Đang sync...");
+  updateCloudMessage("Đang sync...");
+
+  try {
+    const remote = await fetchCloudDocument();
+
+    if (mode === "pull") {
+      if (!remote) {
+        updateCloudStatus("Cloud trống");
+        updateCloudMessage("Cloud trống");
+        return;
+      }
+      await applyCloudDocument(remote);
+      updateCloudStatus("Đã tải");
+      updateCloudMessage("Đã tải từ cloud");
+      return;
+    }
+
+    if (mode === "push" || shouldPushCloud(remote)) {
+      await uploadCloudDocument();
+      updateCloudStatus("Đã lưu cloud");
+      updateCloudMessage("Đã đẩy lên cloud");
+      return;
+    }
+
+    if (remote && shouldPullCloud(remote)) {
+      await applyCloudDocument(remote);
+      updateCloudStatus("Đã tải");
+      updateCloudMessage("Đã tải từ cloud");
+      return;
+    }
+
+    updateCloudStatus("Đã sync");
+    updateCloudMessage("Đã sync");
+  } catch (error) {
+    updateCloudStatus("Lỗi sync");
+    updateCloudMessage(error.message || "Lỗi sync");
+  } finally {
+    cloudSyncing = false;
+  }
+}
+
+function shouldPullCloud(remote) {
+  if (!remote) return false;
+  if (isRowsEffectivelyEmpty()) return true;
+
+  const remoteUpdatedAt = remote.updatedAt || "";
+  const remoteChanged = remoteUpdatedAt && remoteUpdatedAt !== cloudLastSyncAt;
+  const localChanged = localUpdatedAt && localUpdatedAt !== cloudLastSyncAt;
+
+  if (remoteChanged && !localChanged) return true;
+  if (remoteChanged && localChanged) return remoteUpdatedAt > localUpdatedAt;
+  return false;
+}
+
+function shouldPushCloud(remote) {
+  if (!remote) return true;
+  if (isRowsEffectivelyEmpty()) return false;
+
+  const remoteUpdatedAt = remote.updatedAt || "";
+  const remoteChanged = remoteUpdatedAt && remoteUpdatedAt !== cloudLastSyncAt;
+  const localChanged = localUpdatedAt && localUpdatedAt !== cloudLastSyncAt;
+
+  if (localChanged && !remoteChanged) return true;
+  if (localChanged && remoteChanged) return localUpdatedAt >= remoteUpdatedAt;
+  return false;
+}
+
+async function fetchCloudDocument() {
+  const { owner, repo } = parseCloudRepo(cloudRepo);
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(
+    CLOUD_DATA_PATH,
+  )}?ref=${encodeURIComponent(CLOUD_BRANCH)}`;
+  const response = await githubFetch(url);
+
+  if (response.status === 404) {
+    cloudSha = "";
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(await githubErrorMessage(response));
+  }
+
+  const payload = await response.json();
+  cloudSha = payload.sha || "";
+  return normalizeCloudDocument(JSON.parse(decodeBase64Utf8(payload.content || "")));
+}
+
+async function uploadCloudDocument() {
+  if (!cloudSha) {
+    await fetchCloudDocument();
+  }
+
+  const { owner, repo } = parseCloudRepo(cloudRepo);
+  const document = createCloudDocument();
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(
+    CLOUD_DATA_PATH,
+  )}`;
+  const body = {
+    message: `Sync image notes ${document.updatedAt}`,
+    content: encodeBase64Utf8(JSON.stringify(document, null, 2)),
+    branch: CLOUD_BRANCH,
+  };
+  if (cloudSha) body.sha = cloudSha;
+
+  const response = await githubFetch(url, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+
+  if (response.status === 409) {
+    cloudSha = "";
+    await fetchCloudDocument();
+    return uploadCloudDocument();
+  }
+
+  if (!response.ok) {
+    throw new Error(await githubErrorMessage(response));
+  }
+
+  const payload = await response.json();
+  cloudSha = payload.content?.sha || "";
+  markCloudSynced(document.updatedAt);
+}
+
+async function applyCloudDocument(document) {
+  rows = document.rows.map(normalizeRow);
+  if (!rows.length) rows = [createRow()];
+  markCloudSynced(document.updatedAt || new Date().toISOString());
+  await saveRows();
+  renderRows();
+  updateStatus();
+}
+
+function createCloudDocument() {
+  return {
+    app: "image-note-table",
+    version: 2,
+    updatedAt: new Date().toISOString(),
+    rows: rows.map(normalizeRow),
+  };
+}
+
+function normalizeCloudDocument(document) {
+  return {
+    app: document?.app || "image-note-table",
+    version: document?.version || 1,
+    updatedAt: document?.updatedAt || "",
+    rows: Array.isArray(document?.rows) ? document.rows : [],
+  };
+}
+
+function githubFetch(url, options = {}) {
+  return fetch(url, {
+    ...options,
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${cloudToken}`,
+      "Content-Type": "application/json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(options.headers || {}),
+    },
+  });
+}
+
+async function githubErrorMessage(response) {
+  try {
+    const error = await response.json();
+    return error.message || `GitHub lỗi ${response.status}`;
+  } catch (parseError) {
+    return `GitHub lỗi ${response.status}`;
+  }
+}
+
+function parseCloudRepo(value) {
+  const repoValue = value
+    .trim()
+    .replace(/^https:\/\/github\.com\//, "")
+    .replace(/\.git$/, "")
+    .replace(/^\/+|\/+$/g, "");
+  const [owner, repo] = repoValue.split("/");
+
+  if (!owner || !repo) {
+    throw new Error("Invalid repository");
+  }
+
+  return { owner, repo };
+}
+
+function markLocalUpdated() {
+  localUpdatedAt = new Date().toISOString();
+  localStorage.setItem(LOCAL_UPDATED_KEY, localUpdatedAt);
+}
+
+function ensureLocalUpdatedAt() {
+  if (localUpdatedAt) return;
+
+  localUpdatedAt = getRowsUpdatedAt() || new Date().toISOString();
+  localStorage.setItem(LOCAL_UPDATED_KEY, localUpdatedAt);
+}
+
+function markCloudSynced(updatedAt) {
+  cloudLastSyncAt = updatedAt;
+  localUpdatedAt = updatedAt;
+  localStorage.setItem(CLOUD_LAST_SYNC_KEY, cloudLastSyncAt);
+  localStorage.setItem(LOCAL_UPDATED_KEY, localUpdatedAt);
+}
+
+function getRowsUpdatedAt() {
+  return rows.reduce((latest, row) => {
+    if (!row.updatedAt) return latest;
+    return row.updatedAt > latest ? row.updatedAt : latest;
+  }, "");
+}
+
+function isRowsEffectivelyEmpty() {
+  return (
+    rows.length === 1 &&
+    !rows[0].text &&
+    !rows[0].image &&
+    normalizeStatus(rows[0].status) === DEFAULT_STATUS
+  );
+}
+
+function updateCloudStatus(message) {
+  const buttonLabels = {
+    "Chưa kết nối": "Cloud",
+    "Đang sync...": "Sync",
+    "Đã lưu cloud": "Cloud ✓",
+    "Đã tải": "Cloud ✓",
+    "Đã sync": "Cloud ✓",
+    "Cloud trống": "Cloud",
+    "Lỗi sync": "Cloud lỗi",
+  };
+  els.syncButtonText.textContent = buttonLabels[message] || "Cloud";
+  updateCloudMessage(message);
+}
+
+function updateCloudMessage(message) {
+  els.syncMessage.textContent = message || "";
+}
+
+function encodeBase64Utf8(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function decodeBase64Utf8(base64Text) {
+  const binary = atob(base64Text.replace(/\s/g, ""));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 async function openDb() {

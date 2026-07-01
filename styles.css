@@ -147,6 +147,12 @@ h1 {
   border-color: var(--teal);
 }
 
+.button.danger-button {
+  color: var(--red);
+  background: var(--red-soft);
+  border-color: #ffc5bc;
+}
+
 .button:hover,
 .icon-button:hover,
 .mini-button:hover,
@@ -160,6 +166,11 @@ h1 {
 .button.primary:hover {
   background: var(--teal-dark);
   border-color: var(--teal-dark);
+}
+
+.button.danger-button:hover {
+  background: #ffd8d1;
+  border-color: #ffb0a3;
 }
 
 .button:focus-visible,
@@ -566,6 +577,89 @@ textarea:focus {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius);
   box-shadow: 0 28px 80px rgba(0, 0, 0, 0.35);
+}
+
+.sync-dialog {
+  width: min(560px, calc(100vw - 28px));
+  max-width: none;
+  padding: 0;
+  overflow: visible;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.sync-dialog::backdrop {
+  background: rgba(9, 15, 13, 0.46);
+}
+
+.sync-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.field-label {
+  display: grid;
+  gap: 7px;
+  color: #3d4946;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.field-label input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 11px;
+  color: var(--ink);
+  background: #fbfcfc;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+}
+
+.field-label input:focus {
+  border-color: var(--line-strong);
+  outline: 3px solid rgba(8, 117, 104, 0.22);
+  outline-offset: 2px;
+}
+
+.sync-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sync-actions .button {
+  flex: 1 1 120px;
+}
+
+.sync-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+}
+
+.sync-footer a {
+  color: var(--teal);
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.sync-footer a:hover {
+  text-decoration: underline;
+}
+
+.sync-footer p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: right;
 }
 
 .image-dialog::backdrop {
