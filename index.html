@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bảng ghi chú ảnh</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+      <symbol id="icon-eye" viewBox="0 0 24 24">
+        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+        <circle cx="12" cy="12" r="3" />
+      </symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24">
+        <path d="M3 6h18M8 6V4h8v2M6 6l1 15h10l1-15" />
+        <path d="M10 11v6M14 11v6" />
+      </symbol>
+      <symbol id="icon-upload" viewBox="0 0 24 24">
+        <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />
+      </symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24">
+        <path d="M12 4v12M7 11l5 5 5-5M4 20h16" />
+      </symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7" />
+        <path d="m16 16 5 5" />
+      </symbol>
+      <symbol id="icon-image" viewBox="0 0 24 24">
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <circle cx="8.5" cy="10" r="1.5" />
+        <path d="m21 15-4.5-4.5L9 18" />
+      </symbol>
+      <symbol id="icon-x" viewBox="0 0 24 24">
+        <path d="M6 6l12 12M18 6 6 18" />
+      </symbol>
+      <symbol id="icon-chevron-down" viewBox="0 0 24 24">
+        <path d="m6 9 6 6 6-6" />
+      </symbol>
+    </svg>
+
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="title-group">
+          <h1>Bảng ghi chú ảnh</h1>
+          <p id="statusText" aria-live="polite">Đang tải...</p>
+        </div>
+
+        <div class="toolbar" aria-label="Thanh công cụ">
+          <label class="search-box" title="Tìm trong nội dung">
+            <svg class="icon"><use href="#icon-search"></use></svg>
+            <input id="searchInput" type="search" autocomplete="off" placeholder="Tìm kiếm" />
+          </label>
+          <button id="addRowBtn" class="button primary" type="button" title="Thêm dòng">
+            <svg class="icon"><use href="#icon-plus"></use></svg>
+            <span>Thêm dòng</span>
+          </button>
+          <button id="exportBtn" class="button" type="button" title="Xuất dữ liệu">
+            <svg class="icon"><use href="#icon-download"></use></svg>
+            <span>Xuất</span>
+          </button>
+          <button id="importBtn" class="button" type="button" title="Nhập dữ liệu">
+            <svg class="icon"><use href="#icon-upload"></use></svg>
+            <span>Nhập</span>
+          </button>
+          <input id="importFile" class="sr-only" type="file" accept="application/json,.json" />
+        </div>
+      </header>
+
+      <section class="table-wrap" aria-label="Bảng dữ liệu">
+        <div class="grid header-row" role="row">
+          <div class="head-cell index-head" role="columnheader">#</div>
+          <div class="head-cell" role="columnheader">Nội dung</div>
+          <div class="head-cell image-head" role="columnheader">Ảnh</div>
+          <div class="head-cell status-head" role="columnheader">Trạng thái</div>
+          <div class="head-cell delete-head" role="columnheader"></div>
+        </div>
+        <div id="rows" class="rows" role="rowgroup"></div>
+      </section>
+    </main>
+
+    <dialog id="imageDialog" class="image-dialog" aria-labelledby="dialogTitle">
+      <div class="dialog-bar">
+        <h2 id="dialogTitle">Ảnh</h2>
+        <div class="dialog-actions">
+          <button id="downloadImageBtn" class="icon-button" type="button" title="Tải ảnh">
+            <svg class="icon"><use href="#icon-download"></use></svg>
+          </button>
+          <button id="deleteImageBtn" class="icon-button danger" type="button" title="Xóa ảnh khỏi dòng">
+            <svg class="icon"><use href="#icon-trash"></use></svg>
+          </button>
+          <button id="closeDialogBtn" class="icon-button" type="button" title="Đóng">
+            <svg class="icon"><use href="#icon-x"></use></svg>
+          </button>
+        </div>
+      </div>
+      <div class="preview-stage">
+        <img id="previewImage" alt="Ảnh xem lớn" />
+      </div>
+    </dialog>
+
+    <template id="rowTemplate">
+      <div class="grid data-row" role="row">
+        <div class="cell index-cell" role="cell"></div>
+        <div class="cell text-cell" role="cell">
+          <textarea rows="1" spellcheck="false"></textarea>
+        </div>
+        <div class="cell image-cell" role="cell">
+          <div class="image-slot" role="button" tabindex="0" title="Click rồi dán ảnh vào dòng này">
+            <img class="thumb-image" alt="" />
+            <span class="empty-image">
+              <svg class="icon large"><use href="#icon-image"></use></svg>
+            </span>
+            <button class="center-eye view-image" type="button" title="Xem ảnh lớn">
+              <svg class="icon"><use href="#icon-eye"></use></svg>
+            </button>
+          </div>
+          <button class="mini-button pick-image" type="button" title="Chọn file ảnh">
+            <svg class="icon"><use href="#icon-upload"></use></svg>
+          </button>
+          <input class="row-file sr-only" type="file" accept="image/*" />
+        </div>
+        <div class="cell status-cell" role="cell">
+          <div class="status-control">
+            <button class="status-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">
+              <span class="status-label"></span>
+              <svg class="icon"><use href="#icon-chevron-down"></use></svg>
+            </button>
+            <div class="status-menu" role="listbox">
+              <button class="status-choice" type="button" role="option" data-status="todo">Chưa làm</button>
+              <button class="status-choice" type="button" role="option" data-status="doing">Đang làm</button>
+              <button class="status-choice" type="button" role="option" data-status="done">Hoàn thành</button>
+            </div>
+          </div>
+        </div>
+        <div class="cell delete-cell" role="cell">
+          <button class="icon-button delete-row danger" type="button" title="Xóa dòng">
+            <svg class="icon"><use href="#icon-trash"></use></svg>
+          </button>
+        </div>
+      </div>
+    </template>
+
+    <script src="script.js"></script>
+  </body>
+</html>
