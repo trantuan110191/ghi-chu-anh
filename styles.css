@@ -600,6 +600,49 @@ textarea:focus {
   padding: 16px;
 }
 
+.cloud-meter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 11px 12px;
+  color: #36423f;
+  background: #f6faf8;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 720;
+}
+
+.cloud-dot {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  background: var(--amber);
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(182, 109, 0, 0.14);
+}
+
+.sync-dialog[data-sync-state="live"] .cloud-dot,
+#syncBtn[data-sync-state="live"] {
+  color: var(--teal-dark);
+}
+
+.sync-dialog[data-sync-state="live"] .cloud-dot {
+  background: var(--teal);
+  box-shadow: 0 0 0 4px rgba(8, 117, 104, 0.14);
+}
+
+.sync-dialog[data-sync-state="error"] .cloud-dot,
+#syncBtn[data-sync-state="error"] {
+  color: var(--red);
+}
+
+.sync-dialog[data-sync-state="error"] .cloud-dot {
+  background: var(--red);
+  box-shadow: 0 0 0 4px rgba(180, 35, 24, 0.14);
+}
+
 .field-label {
   display: grid;
   gap: 7px;

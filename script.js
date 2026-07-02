@@ -3,12 +3,12 @@ const DB_VERSION = 1;
 const STORE_NAME = "kv";
 const ROWS_KEY = "rows";
 const LOCAL_UPDATED_KEY = `${DB_NAME}:local-updated-at`;
-const CLOUD_TOKEN_KEY = `${DB_NAME}:github-token`;
-const CLOUD_REPO_KEY = `${DB_NAME}:github-repo`;
-const CLOUD_LAST_SYNC_KEY = `${DB_NAME}:cloud-last-sync-at`;
-const CLOUD_DEFAULT_REPO = "trantuan110191/ghi-chu-anh-data";
-const CLOUD_DATA_PATH = "data.json";
-const CLOUD_BRANCH = "main";
+const CLOUD_LAST_SYNC_KEY = `${DB_NAME}:supabase-last-sync-at`;
+const CLOUD_CLIENT_ID_KEY = `${DB_NAME}:supabase-client-id`;
+const SUPABASE_URL = "https://mmvcgghmkgcqhxegxvvd.supabase.co";
+const SUPABASE_KEY = "sb_publishable_Fe50KDec2blv3SzVDkrByQ_8hIJyy9a";
+const SUPABASE_TABLE = "image_notes_state";
+const SUPABASE_ROW_ID = "main";
 const STATUS_OPTIONS = new Set(["todo", "doing", "done"]);
 const DEFAULT_STATUS = "todo";
 const STATUS_LABELS = {
@@ -37,12 +37,8 @@ const els = {
   deleteImageBtn: document.querySelector("#deleteImageBtn"),
   syncDialog: document.querySelector("#syncDialog"),
   closeSyncDialogBtn: document.querySelector("#closeSyncDialogBtn"),
-  syncTokenInput: document.querySelector("#syncTokenInput"),
-  syncRepoInput: document.querySelector("#syncRepoInput"),
-  connectSyncBtn: document.querySelector("#connectSyncBtn"),
   pullSyncBtn: document.querySelector("#pullSyncBtn"),
   pushSyncBtn: document.querySelector("#pushSyncBtn"),
-  disconnectSyncBtn: document.querySelector("#disconnectSyncBtn"),
   syncMessage: document.querySelector("#syncMessage"),
 };
 
@@ -61,10 +57,10 @@ let previewDragScrollLeft = 0;
 let previewDragScrollTop = 0;
 let openStatusRowId = null;
 let localUpdatedAt = localStorage.getItem(LOCAL_UPDATED_KEY) || "";
-let cloudToken = localStorage.getItem(CLOUD_TOKEN_KEY) || "";
-let cloudRepo = localStorage.getItem(CLOUD_REPO_KEY) || CLOUD_DEFAULT_REPO;
 let cloudLastSyncAt = localStorage.getItem(CLOUD_LAST_SYNC_KEY) || "";
-let cloudSha = "";
+let cloudClientId = localStorage.getItem(CLOUD_CLIENT_ID_KEY) || "";
+let cloudClient = null;
+let cloudChannel = null;
 let cloudSyncTimer = null;
 let cloudSyncing = false;
 let saveTimer = null;
@@ -101,10 +97,8 @@ function wireEvents() {
   els.importFile.addEventListener("change", importRows);
   els.syncBtn.addEventListener("click", openSyncDialog);
   els.closeSyncDialogBtn.addEventListener("click", closeSyncDialog);
-  els.connectSyncBtn.addEventListener("click", connectCloudSync);
   els.pullSyncBtn.addEventListener("click", pullCloudNow);
   els.pushSyncBtn.addEventListener("click", pushCloudNow);
-  els.disconnectSyncBtn.addEventListener("click", disconnectCloudSync);
 
   els.rows.addEventListener("input", (event) => {
     const textarea = event.target.closest("textarea");
@@ -763,20 +757,22 @@ async function saveRows() {
 }
 
 function initCloudSync() {
-  els.syncRepoInput.value = cloudRepo;
-  els.syncTokenInput.value = cloudToken;
-  updateCloudStatus(cloudToken ? "Đã kết nối" : "Chưa kết nối");
-
-  if (cloudToken) {
-    syncWithCloud("auto");
+  if (!cloudClientId) {
+    cloudClientId = createId();
+    localStorage.setItem(CLOUD_CLIENT_ID_KEY, cloudClientId);
   }
+
+  if (!window.supabase?.createClient) {
+    updateCloudStatus("Thiếu thư viện");
+    return;
+  }
+
+  cloudClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  updateCloudStatus("Đang kết nối...");
+  syncWithCloud("auto").finally(subscribeToCloudChanges);
 }
 
 function openSyncDialog() {
-  els.syncTokenInput.value = cloudToken;
-  els.syncRepoInput.value = cloudRepo;
-  updateCloudMessage(cloudToken ? "Đã kết nối" : "Chưa kết nối");
-
   if (typeof els.syncDialog.showModal === "function") {
     els.syncDialog.showModal();
   }
@@ -786,69 +782,25 @@ function closeSyncDialog() {
   els.syncDialog.close();
 }
 
-async function connectCloudSync() {
-  const token = els.syncTokenInput.value.trim();
-  const repo = els.syncRepoInput.value.trim() || CLOUD_DEFAULT_REPO;
-
-  if (!token) {
-    updateCloudMessage("Thiếu token");
-    return;
-  }
-
-  try {
-    parseCloudRepo(repo);
-  } catch (error) {
-    updateCloudMessage("Sai kho dữ liệu");
-    return;
-  }
-
-  cloudToken = token;
-  cloudRepo = repo;
-  localStorage.setItem(CLOUD_TOKEN_KEY, cloudToken);
-  localStorage.setItem(CLOUD_REPO_KEY, cloudRepo);
-  updateCloudStatus("Đang sync...");
-  await syncWithCloud("auto");
-}
-
-function disconnectCloudSync() {
-  cloudToken = "";
-  cloudSha = "";
-  cloudLastSyncAt = "";
-  localStorage.removeItem(CLOUD_TOKEN_KEY);
-  localStorage.removeItem(CLOUD_LAST_SYNC_KEY);
-  updateCloudStatus("Chưa kết nối");
-  updateCloudMessage("Đã ngắt");
-}
-
 async function pullCloudNow() {
-  if (!cloudToken) {
-    updateCloudMessage("Chưa kết nối");
-    return;
-  }
-
   await syncWithCloud("pull");
 }
 
 async function pushCloudNow() {
-  if (!cloudToken) {
-    updateCloudMessage("Chưa kết nối");
-    return;
-  }
-
   await syncWithCloud("push");
 }
 
 function queueCloudSync() {
-  if (!cloudToken) return;
+  if (!cloudClient) return;
 
   window.clearTimeout(cloudSyncTimer);
   cloudSyncTimer = window.setTimeout(() => {
     syncWithCloud("auto");
-  }, 1100);
+  }, 650);
 }
 
 async function syncWithCloud(mode) {
-  if (!cloudToken || cloudSyncing) return;
+  if (!cloudClient || cloudSyncing) return;
 
   cloudSyncing = true;
   updateCloudStatus("Đang sync...");
@@ -863,27 +815,27 @@ async function syncWithCloud(mode) {
         updateCloudMessage("Cloud trống");
         return;
       }
-      await applyCloudDocument(remote);
-      updateCloudStatus("Đã tải");
+      await applyCloudDocument(remote, { force: true });
+      updateCloudStatus("Live");
       updateCloudMessage("Đã tải từ cloud");
       return;
     }
 
     if (mode === "push" || shouldPushCloud(remote)) {
       await uploadCloudDocument();
-      updateCloudStatus("Đã lưu cloud");
-      updateCloudMessage("Đã đẩy lên cloud");
+      updateCloudStatus("Live");
+      updateCloudMessage("Đã lưu lên cloud");
       return;
     }
 
     if (remote && shouldPullCloud(remote)) {
       await applyCloudDocument(remote);
-      updateCloudStatus("Đã tải");
+      updateCloudStatus("Live");
       updateCloudMessage("Đã tải từ cloud");
       return;
     }
 
-    updateCloudStatus("Đã sync");
+    updateCloudStatus("Live");
     updateCloudMessage("Đã sync");
   } catch (error) {
     updateCloudStatus("Lỗi sync");
@@ -896,6 +848,7 @@ async function syncWithCloud(mode) {
 function shouldPullCloud(remote) {
   if (!remote) return false;
   if (isRowsEffectivelyEmpty()) return true;
+  if (isCloudDocumentEffectivelyEmpty(remote)) return false;
 
   const remoteUpdatedAt = remote.updatedAt || "";
   const remoteChanged = remoteUpdatedAt && remoteUpdatedAt !== cloudLastSyncAt;
@@ -909,6 +862,7 @@ function shouldPullCloud(remote) {
 function shouldPushCloud(remote) {
   if (!remote) return true;
   if (isRowsEffectivelyEmpty()) return false;
+  if (isCloudDocumentEffectivelyEmpty(remote)) return true;
 
   const remoteUpdatedAt = remote.updatedAt || "";
   const remoteChanged = remoteUpdatedAt && remoteUpdatedAt !== cloudLastSyncAt;
@@ -920,125 +874,112 @@ function shouldPushCloud(remote) {
 }
 
 async function fetchCloudDocument() {
-  const { owner, repo } = parseCloudRepo(cloudRepo);
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(
-    CLOUD_DATA_PATH,
-  )}?ref=${encodeURIComponent(CLOUD_BRANCH)}`;
-  const response = await githubFetch(url);
+  const { data, error } = await cloudClient
+    .from(SUPABASE_TABLE)
+    .select("data,updated_at")
+    .eq("id", SUPABASE_ROW_ID)
+    .maybeSingle();
 
-  if (response.status === 404) {
-    cloudSha = "";
-    return null;
+  if (error) {
+    throw new Error(error.message || "Không tải được cloud");
   }
 
-  if (!response.ok) {
-    throw new Error(await githubErrorMessage(response));
-  }
+  if (!data) return null;
 
-  const payload = await response.json();
-  cloudSha = payload.sha || "";
-  return normalizeCloudDocument(JSON.parse(decodeBase64Utf8(payload.content || "")));
+  return normalizeCloudDocument(data.data, data.updated_at);
 }
 
 async function uploadCloudDocument() {
-  if (!cloudSha) {
-    await fetchCloudDocument();
-  }
-
-  const { owner, repo } = parseCloudRepo(cloudRepo);
   const document = createCloudDocument();
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(
-    CLOUD_DATA_PATH,
-  )}`;
-  const body = {
-    message: `Sync image notes ${document.updatedAt}`,
-    content: encodeBase64Utf8(JSON.stringify(document, null, 2)),
-    branch: CLOUD_BRANCH,
-  };
-  if (cloudSha) body.sha = cloudSha;
-
-  const response = await githubFetch(url, {
-    method: "PUT",
-    body: JSON.stringify(body),
+  const { error } = await cloudClient.from(SUPABASE_TABLE).upsert({
+    id: SUPABASE_ROW_ID,
+    data: document,
+    updated_at: document.updatedAt,
   });
 
-  if (response.status === 409) {
-    cloudSha = "";
-    await fetchCloudDocument();
-    return uploadCloudDocument();
+  if (error) {
+    throw new Error(error.message || "Không lưu được cloud");
   }
 
-  if (!response.ok) {
-    throw new Error(await githubErrorMessage(response));
-  }
-
-  const payload = await response.json();
-  cloudSha = payload.content?.sha || "";
   markCloudSynced(document.updatedAt);
 }
 
-async function applyCloudDocument(document) {
-  rows = document.rows.map(normalizeRow);
+async function applyCloudDocument(document, options = {}) {
+  const nextDocument = normalizeCloudDocument(document);
+  const remoteUpdatedAt = nextDocument.updatedAt || "";
+  const localHasUnsyncedChanges = localUpdatedAt && localUpdatedAt !== cloudLastSyncAt;
+
+  if (!options.force && localHasUnsyncedChanges && remoteUpdatedAt < localUpdatedAt) {
+    return false;
+  }
+
+  rows = nextDocument.rows.map(normalizeRow);
   if (!rows.length) rows = [createRow()];
-  markCloudSynced(document.updatedAt || new Date().toISOString());
+  markCloudSynced(remoteUpdatedAt || new Date().toISOString());
   await saveRows();
   renderRows();
   updateStatus();
+  return true;
 }
 
 function createCloudDocument() {
+  const updatedAt = localUpdatedAt || new Date().toISOString();
   return {
     app: "image-note-table",
-    version: 2,
-    updatedAt: new Date().toISOString(),
+    version: 3,
+    updatedAt,
+    sourceId: cloudClientId,
     rows: rows.map(normalizeRow),
   };
 }
 
-function normalizeCloudDocument(document) {
+function normalizeCloudDocument(document, rowUpdatedAt = "") {
   return {
     app: document?.app || "image-note-table",
     version: document?.version || 1,
-    updatedAt: document?.updatedAt || "",
+    updatedAt: document?.updatedAt || rowUpdatedAt || "",
+    sourceId: document?.sourceId || "",
     rows: Array.isArray(document?.rows) ? document.rows : [],
   };
 }
 
-function githubFetch(url, options = {}) {
-  return fetch(url, {
-    ...options,
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${cloudToken}`,
-      "Content-Type": "application/json",
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(options.headers || {}),
-    },
-  });
-}
+function subscribeToCloudChanges() {
+  if (!cloudClient || cloudChannel) return;
 
-async function githubErrorMessage(response) {
-  try {
-    const error = await response.json();
-    return error.message || `GitHub lỗi ${response.status}`;
-  } catch (parseError) {
-    return `GitHub lỗi ${response.status}`;
-  }
-}
+  cloudChannel = cloudClient
+    .channel("image-notes-state-main")
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: SUPABASE_TABLE,
+        filter: `id=eq.${SUPABASE_ROW_ID}`,
+      },
+      async (payload) => {
+        const remote = normalizeCloudDocument(payload.new?.data, payload.new?.updated_at);
 
-function parseCloudRepo(value) {
-  const repoValue = value
-    .trim()
-    .replace(/^https:\/\/github\.com\//, "")
-    .replace(/\.git$/, "")
-    .replace(/^\/+|\/+$/g, "");
-  const [owner, repo] = repoValue.split("/");
+        if (!remote.updatedAt || remote.updatedAt === cloudLastSyncAt) {
+          return;
+        }
 
-  if (!owner || !repo) {
-    throw new Error("Invalid repository");
-  }
+        const applied = await applyCloudDocument(remote);
+        if (applied) {
+          updateCloudStatus("Live");
+          updateCloudMessage("Đã cập nhật realtime");
+        }
+      },
+    )
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED") {
+        updateCloudStatus("Live");
+        return;
+      }
 
-  return { owner, repo };
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        updateCloudStatus("Lỗi sync");
+      }
+    });
 }
 
 function markLocalUpdated() {
@@ -1076,39 +1017,35 @@ function isRowsEffectivelyEmpty() {
   );
 }
 
+function isCloudDocumentEffectivelyEmpty(document) {
+  const remoteRows = Array.isArray(document?.rows) ? document.rows.map(normalizeRow) : [];
+  return (
+    !remoteRows.length ||
+    (remoteRows.length === 1 &&
+      !remoteRows[0].text &&
+      !remoteRows[0].image &&
+      normalizeStatus(remoteRows[0].status) === DEFAULT_STATUS)
+  );
+}
+
 function updateCloudStatus(message) {
   const buttonLabels = {
-    "Chưa kết nối": "Cloud",
+    "Đang kết nối...": "Sync",
     "Đang sync...": "Sync",
-    "Đã lưu cloud": "Cloud ✓",
-    "Đã tải": "Cloud ✓",
-    "Đã sync": "Cloud ✓",
+    Live: "Live",
     "Cloud trống": "Cloud",
     "Lỗi sync": "Cloud lỗi",
+    "Thiếu thư viện": "Cloud lỗi",
   };
+  const syncState = message === "Live" ? "live" : message.includes("Lỗi") ? "error" : "syncing";
+  els.syncBtn.dataset.syncState = syncState;
+  els.syncDialog.dataset.syncState = syncState;
   els.syncButtonText.textContent = buttonLabels[message] || "Cloud";
   updateCloudMessage(message);
 }
 
 function updateCloudMessage(message) {
   els.syncMessage.textContent = message || "";
-}
-
-function encodeBase64Utf8(text) {
-  const bytes = new TextEncoder().encode(text);
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-function decodeBase64Utf8(base64Text) {
-  const binary = atob(base64Text.replace(/\s/g, ""));
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
 }
 
 async function openDb() {

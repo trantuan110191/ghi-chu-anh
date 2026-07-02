@@ -111,33 +111,19 @@
 
     <dialog id="syncDialog" class="sync-dialog" aria-labelledby="syncTitle">
       <div class="dialog-bar">
-        <h2 id="syncTitle">Cloud sync</h2>
+        <h2 id="syncTitle">Realtime sync</h2>
         <button id="closeSyncDialogBtn" class="icon-button" type="button" title="Đóng">
           <svg class="icon"><use href="#icon-x"></use></svg>
         </button>
       </div>
       <div class="sync-panel">
-        <label class="field-label">
-          <span>GitHub token</span>
-          <input id="syncTokenInput" type="password" autocomplete="off" placeholder="ghp_..." />
-        </label>
-        <label class="field-label">
-          <span>Kho dữ liệu</span>
-          <input id="syncRepoInput" type="text" autocomplete="off" />
-        </label>
-        <div class="sync-actions">
-          <button id="connectSyncBtn" class="button primary" type="button">Kết nối</button>
-          <button id="pullSyncBtn" class="button" type="button">Tải từ cloud</button>
-          <button id="pushSyncBtn" class="button" type="button">Đẩy lên cloud</button>
-          <button id="disconnectSyncBtn" class="button danger-button" type="button">Ngắt</button>
+        <div class="cloud-meter">
+          <span class="cloud-dot" aria-hidden="true"></span>
+          <span id="syncMessage" aria-live="polite">Đang kết nối...</span>
         </div>
-        <div class="sync-footer">
-          <a
-            href="https://github.com/settings/tokens/new?scopes=repo&description=Ghi%20chu%20anh%20cloud%20sync"
-            target="_blank"
-            rel="noreferrer"
-          >Tạo token</a>
-          <p id="syncMessage" aria-live="polite"></p>
+        <div class="sync-actions">
+          <button id="pullSyncBtn" class="button" type="button">Tải lại</button>
+          <button id="pushSyncBtn" class="button primary" type="button">Lưu lên cloud</button>
         </div>
       </div>
     </dialog>
@@ -184,6 +170,7 @@
       </div>
     </template>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="script.js"></script>
   </body>
 </html>
