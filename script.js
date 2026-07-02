@@ -762,14 +762,15 @@ function initCloudSync() {
     localStorage.setItem(CLOUD_CLIENT_ID_KEY, cloudClientId);
   }
 
-  if (!window.supabase?.createClient) {
+  const supabaseLibrary = getSupabaseLibrary();
+  if (!supabaseLibrary?.createClient) {
     updateCloudStatus("Thiếu thư viện");
     return;
   }
 
-  cloudClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  cloudClient = supabaseLibrary.createClient(SUPABASE_URL, SUPABASE_KEY);
   updateCloudStatus("Đang kết nối...");
-  syncWithCloud("auto").finally(subscribeToCloudChanges);
+  syncWithCloud("initial").finally(subscribeToCloudChanges);
 }
 
 function openSyncDialog() {
@@ -808,6 +809,26 @@ async function syncWithCloud(mode) {
 
   try {
     const remote = await fetchCloudDocument();
+
+    if (mode === "initial") {
+      if (remote && !isCloudDocumentEffectivelyEmpty(remote)) {
+        await applyCloudDocument(remote, { force: true });
+        updateCloudStatus("Live");
+        updateCloudMessage("Đã tải từ cloud");
+        return;
+      }
+
+      if (!isRowsEffectivelyEmpty()) {
+        await uploadCloudDocument();
+        updateCloudStatus("Live");
+        updateCloudMessage("Đã lưu lên cloud");
+        return;
+      }
+
+      updateCloudStatus("Live");
+      updateCloudMessage(remote ? "Cloud trống" : "Đã sync");
+      return;
+    }
 
     if (mode === "pull") {
       if (!remote) {
@@ -980,6 +1001,12 @@ function subscribeToCloudChanges() {
         updateCloudStatus("Lỗi sync");
       }
     });
+}
+
+function getSupabaseLibrary() {
+  if (window.supabase?.createClient) return window.supabase;
+  if (typeof supabase !== "undefined" && supabase?.createClient) return supabase;
+  return null;
 }
 
 function markLocalUpdated() {
